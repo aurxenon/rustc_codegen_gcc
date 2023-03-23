@@ -576,6 +576,8 @@ fn reg_to_gcc(reg: InlineAsmRegOrRegClass) -> ConstraintOrRegister {
             InlineAsmRegClass::AArch64(AArch64InlineAsmRegClass::preg) => {
                 unreachable!("clobber-only")
             }
+            InlineAsmRegClass::Alpha(AlphaInlineAsmRegClass::reg) => "r",
+            InlineAsmRegClass::Alpha(AlphaInlineAsmRegClass::freg) => "f",
             InlineAsmRegClass::Arm(ArmInlineAsmRegClass::reg) => "r",
             InlineAsmRegClass::Arm(ArmInlineAsmRegClass::sreg)
             | InlineAsmRegClass::Arm(ArmInlineAsmRegClass::dreg_low16)
@@ -650,6 +652,8 @@ fn dummy_output_type<'gcc, 'tcx>(cx: &CodegenCx<'gcc, 'tcx>, reg: InlineAsmRegCl
         | InlineAsmRegClass::AArch64(AArch64InlineAsmRegClass::vreg_low16) => {
             unimplemented!()
         }
+        InlineAsmRegClass::Alpha(AlphaInlineAsmRegClass::reg) => cx.type_i32(),
+        InlineAsmRegClass::Alpha(AlphaInlineAsmRegClass::freg) => cx.type_f32(),
         InlineAsmRegClass::Arm(ArmInlineAsmRegClass::reg)=> cx.type_i32(),
         InlineAsmRegClass::Arm(ArmInlineAsmRegClass::sreg)
         | InlineAsmRegClass::Arm(ArmInlineAsmRegClass::sreg_low16) => cx.type_f32(),
@@ -782,6 +786,8 @@ fn modifier_to_gcc(arch: InlineAsmArch, reg: InlineAsmRegClass, modifier: Option
         InlineAsmRegClass::AArch64(AArch64InlineAsmRegClass::preg) => {
             unreachable!("clobber-only")
         }
+        InlineAsmRegClass::Alpha(AlphaInlineAsmRegClass::reg)
+        | InlineAsmRegClass::Alpha(AlphaInlineAsmRegClass::freg) => None,
         InlineAsmRegClass::Arm(ArmInlineAsmRegClass::reg) => None,
         InlineAsmRegClass::Arm(ArmInlineAsmRegClass::sreg)
         | InlineAsmRegClass::Arm(ArmInlineAsmRegClass::sreg_low16) => None,
