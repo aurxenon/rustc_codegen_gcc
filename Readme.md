@@ -1,6 +1,7 @@
 # WIP libgccjit codegen backend for rust
 
 [![Chat on IRC](https://img.shields.io/badge/irc.libera.chat-%23rustc__codegen__gcc-blue.svg)](https://web.libera.chat/#rustc_codegen_gcc)
+[![Chat on Matrix](https://img.shields.io/badge/matrix.org-%23rustc__codegen__gcc-blue.svg)](https://matrix.to/#/#rustc_codegen_gcc:matrix.org)
 
 This is a GCC codegen for rustc, which means it can be loaded by the existing rustc frontend, but benefits from GCC: more architectures are supported and GCC's optimizations are used.
 
@@ -14,9 +15,7 @@ A secondary goal is to check if using the gcc backend will provide any run-time 
 ## Building
 
 **This requires a patched libgccjit in order to work.
-The patches in [this repository](https://github.com/antoyo/libgccjit-patches) need to be applied.
-(Those patches should work when applied on master, but in case it doesn't work, they are known to work when applied on 079c23cfe079f203d5df83fea8e92a60c7d7e878.)
-You can also use my [fork of gcc](https://github.com/antoyo/gcc) which already includes these patches.**
+You need to use my [fork of gcc](https://github.com/antoyo/gcc) which already includes these patches.**
 
 To build it (most of these instructions come from [here](https://gcc.gnu.org/onlinedocs/jit/internals/index.html), so don't hesitate to take a look there if you encounter an issue):
 
@@ -66,7 +65,7 @@ $ export RUST_COMPILER_RT_ROOT="$PWD/llvm/compiler-rt"
 Then you can run commands like this:
 
 ```bash
-$ ./prepare.sh # download and patch sysroot src and install hyperfine for benchmarking
+$ ./y.sh prepare # download and patch sysroot src and install hyperfine for benchmarking
 $ LIBRARY_PATH=$(cat gcc_path) LD_LIBRARY_PATH=$(cat gcc_path) ./build.sh --release
 ```
 
@@ -78,22 +77,29 @@ $ ./test.sh --release
 
 ## Usage
 
-`$cg_gccjit_dir` is the directory you cloned this repo into in the following instructions.
+`$CG_GCCJIT_DIR` is the directory you cloned this repo into in the following instructions:
+
+```bash
+export CG_GCCJIT_DIR=[the full path to rustc_codegen_gcc]
+```
 
 ### Cargo
 
 ```bash
-$ CHANNEL="release" $cg_gccjit_dir/cargo.sh run
+$ CHANNEL="release" $CG_GCCJIT_DIR/cargo.sh run
 ```
 
 If you compiled cg_gccjit in debug mode (aka you didn't pass `--release` to `./test.sh`) you should use `CHANNEL="debug"` instead or omit `CHANNEL="release"` completely.
+
+To use LTO, you need to set the variable `FAT_LTO=1` and `EMBED_LTO_BITCODE=1` in addition to setting `lto = "fat"` in the `Cargo.toml`.
+Don't set `FAT_LTO` when compiling the sysroot, though: only set `EMBED_LTO_BITCODE=1`.
 
 ### Rustc
 
 > You should prefer using the Cargo method.
 
 ```bash
-$ rustc +$(cat $cg_gccjit_dir/rust-toolchain) -Cpanic=abort -Zcodegen-backend=$cg_gccjit_dir/target/release/librustc_codegen_gcc.so --sysroot $cg_gccjit_dir/build_sysroot/sysroot my_crate.rs
+$ LIBRARY_PATH=$(cat gcc_path) LD_LIBRARY_PATH=$(cat gcc_path) rustc +$(cat $CG_GCCJIT_DIR/rust-toolchain | grep 'channel' | cut -d '=' -f 2 | sed 's/"//g' | sed 's/ //g') -Cpanic=abort -Zcodegen-backend=$CG_GCCJIT_DIR/target/release/librustc_codegen_gcc.so --sysroot $CG_GCCJIT_DIR/build_sysroot/sysroot my_crate.rs
 ```
 
 ## Env vars
@@ -106,6 +112,12 @@ $ rustc +$(cat $cg_gccjit_dir/rust-toolchain) -Cpanic=abort -Zcodegen-backend=$c
     <dt>CG_GCCJIT_DISPLAY_CG_TIME</dt>
     <dd>Display the time it took to perform codegen for a crate</dd>
 </dl>
+
+## Licensing
+
+While this crate is licensed under a dual Apache/MIT license, it links to `libgccjit` which is under the GPLv3+ and thus, the resulting toolchain (rustc + GCC codegen) will need to be released under the GPL license.
+
+However, programs compiled with `rustc_codegen_gcc` do not need to be released under a GPL license.
 
 ## Debugging
 
@@ -182,6 +194,48 @@ set substitute-path /usr/src/debug/gcc /path/to/gcc-repo/gcc
 
 TODO(antoyo): but that's not what I remember I was doing.
 
+### `failed to build archive` error
+
+When you get this error:
+
+```
+error: failed to build archive: failed to open object file: No such file or directory (os error 2)
+```
+
+That can be caused by the fact that you try to compile with `lto = "fat"`, but you didn't compile the sysroot with LTO.
+(Not sure if that's the reason since I cannot reproduce anymore. Maybe it happened when forgetting setting `FAT_LTO`.)
+
+### How to debug GCC LTO
+
+Run do the command with `-v -save-temps` and then extract the `lto1` line from the output and run that under the debugger.
+
+### How to send arguments to the GCC linker
+
+```
+CG_RUSTFLAGS="-Clink-args=-save-temps -v" ../cargo.sh build
+```
+
+### How to see the personality functions in the asm dump
+
+```
+CG_RUSTFLAGS="-Clink-arg=-save-temps -v -Clink-arg=-dA" ../cargo.sh build
+```
+
+### How to see the LLVM IR for a sysroot crate
+
+```
+cargo build -v --target x86_64-unknown-linux-gnu -Zbuild-std
+# Take the command from the output and add --emit=llvm-ir
+```
+
+### To prevent the linker from unmangling symbols
+
+Run with:
+
+```
+COLLECT_NO_DEMANGLE=1
+```
+
 ### How to use a custom-build rustc
 
  * Build the stage2 compiler (`rustup toolchain link debug-current build/x86_64-unknown-linux-gnu/stage2`).
@@ -193,7 +247,7 @@ Using git-subtree with `rustc` requires a patched git to make it work.
 The PR that is needed is [here](https://github.com/gitgitgadget/git/pull/493).
 Use the following instructions to install it:
 
-```
+```bash
 git clone git@github.com:tqc/git.git
 cd git
 git checkout tqc/subtree
@@ -204,9 +258,29 @@ make
 cp git-subtree ~/bin
 ```
 
+Then, do a sync with this command:
+
+```bash
+PATH="$HOME/bin:$PATH" ~/bin/git-subtree push -P compiler/rustc_codegen_gcc/ ../rustc_codegen_gcc/ sync_branch_name
+cd ../rustc_codegen_gcc
+git checkout master
+git pull
+git checkout sync_branch_name
+git merge master
+```
+
+TODO: write a script that does the above.
+
+https://rust-lang.zulipchat.com/#narrow/stream/301329-t-devtools/topic/subtree.20madness/near/258877725
+
 ### How to use [mem-trace](https://github.com/antoyo/mem-trace)
 
 `rustc` needs to be built without `jemalloc` so that `mem-trace` can overload `malloc` since `jemalloc` is linked statically, so a `LD_PRELOAD`-ed library won't a chance to intercept the calls to `malloc`.
+
+### How to generate GIMPLE
+
+If you need to check what gccjit is generating (GIMPLE), then take a look at how to
+generate it in [gimple.md](./doc/gimple.md).
 
 ### How to build a cross-compiling libgccjit
 
@@ -224,4 +298,4 @@ cp git-subtree ~/bin
  * Set `linker='-Clinker=m68k-linux-gcc'`.
  * Set the path to the cross-compiling libgccjit in `gcc_path`.
  * Comment the line: `context.add_command_line_option("-masm=intel");` in src/base.rs.
- * (might not be necessary) Disable the compilation of libstd.so (and possibly libcore.so?).
+ * (might not be necessary) Disable the compilation of libstd.so (and possibly libcore.so?): Remove dylib from build_sysroot/sysroot_src/library/std/Cargo.toml.

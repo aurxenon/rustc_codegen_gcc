@@ -2,14 +2,18 @@
 use gccjit::FnAttribute;
 use gccjit::Function;
 use rustc_attr::InstructionSetAttr;
+#[cfg(feature="master")]
+use rustc_attr::InlineAttr;
 use rustc_codegen_ssa::target_features::tied_target_features;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_middle::ty;
+#[cfg(feature="master")]
+use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_session::Session;
 use rustc_span::symbol::sym;
 use smallvec::{smallvec, SmallVec};
 
-use crate::context::CodegenCx;
+use crate::{context::CodegenCx, errors::TiedTargetFeatures};
 
 // Given a map from target_features to whether they are enabled or disabled,
 // ensure only valid combinations are allowed.
@@ -67,6 +71,24 @@ fn to_gcc_features<'a>(sess: &Session, s: &'a str) -> SmallVec<[&'a str; 2]> {
     }
 }
 
+/// Get GCC attribute for the provided inline heuristic.
+#[cfg(feature="master")]
+#[inline]
+fn inline_attr<'gcc, 'tcx>(cx: &CodegenCx<'gcc, 'tcx>, inline: InlineAttr) -> Option<FnAttribute<'gcc>> {
+    match inline {
+        InlineAttr::Hint => Some(FnAttribute::Inline),
+        InlineAttr::Always => Some(FnAttribute::AlwaysInline),
+        InlineAttr::Never => {
+            if cx.sess().target.arch != "amdgpu" {
+                Some(FnAttribute::NoInline)
+            } else {
+                None
+            }
+        }
+        InlineAttr::None => None,
+    }
+}
+
 /// Composite function which sets GCC attributes for function depending on its AST (`#[attribute]`)
 /// attributes.
 pub fn from_fn_attrs<'gcc, 'tcx>(
@@ -77,6 +99,36 @@ pub fn from_fn_attrs<'gcc, 'tcx>(
 ) {
     let codegen_fn_attrs = cx.tcx.codegen_fn_attrs(instance.def_id());
 
+    #[cfg(feature="master")]
+    {
+        let inline =
+            if codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::NAKED) {
+                InlineAttr::Never
+            }
+            else if codegen_fn_attrs.inline == InlineAttr::None && instance.def.requires_inline(cx.tcx) {
+                InlineAttr::Hint
+            }
+            else {
+                codegen_fn_attrs.inline
+            };
+        if let Some(attr) = inline_attr(cx, inline) {
+            func.add_attribute(attr);
+        }
+
+        if codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::COLD) {
+            func.add_attribute(FnAttribute::Cold);
+        }
+        if codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::FFI_RETURNS_TWICE) {
+            func.add_attribute(FnAttribute::ReturnsTwice);
+        }
+        if codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::FFI_PURE) {
+            func.add_attribute(FnAttribute::Pure);
+        }
+        if codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::FFI_CONST) {
+            func.add_attribute(FnAttribute::Const);
+        }
+    }
+
     let function_features =
         codegen_fn_attrs.target_features.iter().map(|features| features.as_str()).collect::<Vec<&str>>();
 
@@ -84,10 +136,11 @@ pub fn from_fn_attrs<'gcc, 'tcx>(
         let span = cx.tcx
             .get_attr(instance.def_id(), sym::target_feature)
             .map_or_else(|| cx.tcx.def_span(instance.def_id()), |a| a.span);
-        let msg = format!("the target features {} must all be either enabled or disabled together", features.join(", "));
-        let mut err = cx.tcx.sess.struct_span_err(span, &msg);
-        err.help("add the missing features in a `target_feature` attribute");
-        err.emit();
+        cx.tcx.sess.create_err(TiedTargetFeatures {
+            features: features.join(", "),
+            span,
+        })
+            .emit();
         return;
     }
 

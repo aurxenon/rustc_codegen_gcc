@@ -3,6 +3,7 @@
 # TODO(antoyo): rewrite to cargo-make (or just) or something like that to only rebuild the sysroot when needed?
 
 set -e
+#set -x
 
 if [ -f ./gcc_path ]; then
     export GCC_PATH=$(cat gcc_path)
@@ -214,12 +215,14 @@ function setup_rustc() {
     rm config.toml || true
 
     cat > config.toml <<EOF
+changelog-seen = 2
+
 [rust]
 codegen-backends = []
 deny-warnings = false
 
 [build]
-cargo = "$(which cargo)"
+cargo = "$(rustup which cargo)"
 local-rebuild = true
 rustc = "$HOME/.rustup/toolchains/$rust_toolchain-$TARGET_TRIPLE/bin/rustc"
 
@@ -237,7 +240,7 @@ EOF
 function asm_tests() {
     setup_rustc
 
-    echo "[TEST] rustc test suite"
+    echo "[TEST] rustc asm test suite"
     RUSTC_ARGS="-Zpanic-abort-tests -Csymbol-mangling-version=v0 -Zcodegen-backend="$(pwd)"/../target/"$CHANNEL"/librustc_codegen_gcc."$dylib_ext" --sysroot "$(pwd)"/../build_sysroot/sysroot -Cpanic=abort"
     COMPILETEST_FORCE_STAGE0=1 ./x.py test --run always --stage 0 tests/assembly/asm --rustc-args "$RUSTC_ARGS"
 }
@@ -338,18 +341,23 @@ function test_rustc() {
     for test in $(rg -i --files-with-matches "//(\[\w+\])?~|// error-pattern:|// build-fail|// run-fail|-Cllvm-args" tests/ui); do
       rm $test
     done
+    rm tests/ui/consts/const_cmp_type_id.rs
+    rm tests/ui/consts/issue-73976-monomorphic.rs
 
     git checkout -- tests/ui/issues/auxiliary/issue-3136-a.rs # contains //~ERROR, but shouldn't be removed
 
-    rm -r tests/ui/{abi*,extern/,unsized-locals/,proc-macro/,threads-sendsync/,thinlto/,borrowck/,chalkify/bugs/,test*,*lto*.rs,consts/const-float-bits-reject-conv.rs,consts/issue-miri-1910.rs} || true
-    rm tests/ui/mir/mir_heavy_promoted.rs # this tests is oom-killed in the CI.
-    for test in $(rg --files-with-matches "thread|lto" tests/ui); do
+    rm -r tests/ui/{abi*,extern/,unsized-locals/,proc-macro/,threads-sendsync/,thinlto/,borrowck/,chalkify/bugs/,test*,consts/const-float-bits-reject-conv.rs,consts/issue-miri-1910.rs} || true
+    rm tests/ui/mir/mir_heavy_promoted.rs # this test is oom-killed in the CI.
+    # Tests generating errors.
+    rm tests/ui/consts/const-eval/nonnull_as_ref_ub.rs tests/ui/consts/issue-94675.rs
+    for test in $(rg --files-with-matches "thread" tests/ui); do
       rm $test
     done
-    git checkout tests/ui/lto/auxiliary/dylib.rs
     git checkout tests/ui/type-alias-impl-trait/auxiliary/cross_crate_ice.rs
     git checkout tests/ui/type-alias-impl-trait/auxiliary/cross_crate_ice2.rs
     git checkout tests/ui/macros/rfc-2011-nicer-assert-messages/auxiliary/common.rs
+    git checkout tests/ui/imports/ambiguous-1.rs
+    git checkout tests/ui/imports/ambiguous-4-extern.rs
 
     RUSTC_ARGS="$TEST_FLAGS -Csymbol-mangling-version=v0 -Zcodegen-backend="$(pwd)"/../target/"$CHANNEL"/librustc_codegen_gcc."$dylib_ext" --sysroot "$(pwd)"/../build_sysroot/sysroot"
 
